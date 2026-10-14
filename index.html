@@ -219,7 +219,52 @@ function renderTargets(){$('targetTable').querySelector('tbody').innerHTML=DIVIS
 window.saveOneTarget=async d=>{let input=document.querySelector(`[data-div="${CSS.escape(d)}"]`);targets[d]=num(input.value);await putSetting('targets',targets);render();toast('Target updated locally. Use Save targets to sync Google.')};
 async function saveTargets(){document.querySelectorAll('[data-div]').forEach(i=>targets[i.dataset.div]=num(i.value));await putSetting('targets',targets);render();if(config.apiUrl)try{await api('saveTargets',{targets});toast('Targets saved locally and sent to Google Sheet.')}catch(e){toast('Saved locally; Google sync failed: '+e.message)}else toast('Targets saved in local database.')}
 async function api(action,payload={}){if(!config.apiUrl)throw Error('Set the Apps Script web app URL first.');let url=config.apiUrl+'?action='+encodeURIComponent(action);if(action==='getAll'||action==='ping'){let r=await fetch(url);if(!r.ok)throw Error('HTTP '+r.status);return r.json()}let r=await fetch(config.apiUrl,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action,...payload})});if(!r.ok)throw Error('HTTP '+r.status);return r.json()}
-async function syncGoogle(){if(!config.apiUrl){toast('Open Admin Login → Google Setup and enter the deployed /exec URL.');return}try{$('syncBtn').disabled=true;$('syncStatus').textContent='Syncing Google Sheet…';let result=await api('getAll');if(!result.ok)throw Error(result.error||'Google API error');if(result.targets&&Object.keys(result.targets).length){targets={...targets,...result.targets};await putSetting('targets',targets)}for(const x of (result.records||[])){let source={...x,'Division':x.division,'Month':x.month,'Live Accounts':x.live,'Prop. Live Accounts':x.propLive??x['Prop. Live Accounts']??x['Prop.Live Accounts'],'Certificates':x.cert??x.certificates,'Silent Accounts':x.silent};let r=normRow(source,x.month);await saveRecord(r)}await getAll();let payload=records.map(r=>({...r,live:Number(r.live||0),propLive:Number(r.propLive||0),cert:Number(r.cert||0),silent:Number(r.silent||0),liveRev:Number(r.propLive||0)*219.23/10000000,certRev:Number(r.cert||0)*73.92/10000000,silentRev:Number(r.silent||0)*35.61/10000000}));if(payload.length){let pushed=await api('uploadRecords',{records:payload});if(!pushed.ok)throw Error(pushed.error||'Could not update calculated revenue in Google Sheet')}let stamp=new Date().toLocaleString();await putSetting('lastSync',stamp);$('lastSync').textContent=stamp;$('syncStatus').textContent='Google sync complete • '+stamp;toast('Google sync complete. Revenue calculations updated in Google Sheet; '+records.length+' records processed.')}catch(e){$('syncStatus').textContent='Google sync failed • local data retained';toast('Google sync failed: '+e.message)}finally{$('syncBtn').disabled=false}}
+async function syncGoogle(){
+ if(!config.apiUrl){toast('Open Admin Login → Google Setup and enter the deployed /exec URL.');return}
+ try{
+  $('syncBtn').disabled=true;$('syncStatus').textContent='Syncing Google Sheet…';
+  // Keep a snapshot of local source counts before downloading remote data. A stale zero in
+  // Google must never erase a valid Prop. Live Accounts figure saved locally.
+  const localByKey=new Map(records.map(r=>[r.key,{...r}]));
+  let result=await api('getAll');if(!result.ok)throw Error(result.error||'Google API error');
+  if(result.targets&&Object.keys(result.targets).length){targets={...targets,...result.targets};await putSetting('targets',targets)}
+  for(const x of (result.records||[])){
+   const key=String(x.month||'')+'|'+String(x.division||'').trim();
+   const local=localByKey.get(key);
+   // Prefer a valid local proportionate count over a stale zero downloaded from Google.
+   // Check all legacy field spellings instead of using ??, because zero is not a missing value.
+   const localPropCandidates=local?[local.propLive,local['Prop. Live Accounts'],local['Prop.Live Accounts'],local.prop_live_accounts]:[];
+   const localProp=localPropCandidates.map(v=>Number(v||0)).find(v=>v>0)||0;
+   const remotePropCandidates=[x.propLive,x['Prop. Live Accounts'],x['Prop.Live Accounts'],x.prop_live_accounts];
+   const remoteProp=remotePropCandidates.map(v=>Number(v||0)).find(v=>v>0)||0;
+   const source={...x,division:x.division,month:x.month,live:x.live,propLive:localProp||remoteProp,cert:x.cert??x.certificates,silent:x.silent};
+   let r=normRow(source,x.month);
+   if(local){
+    // Preserve locally uploaded counts when Google still has stale zero values.
+    for(const k of ['live','propLive','cert','silent']){
+     const localValue=Number(local[k]||0);
+     if(localValue!==0 && (Number(r[k])||0)===0) r[k]=localValue;
+    }
+    // If local proportionate accounts are present, they are authoritative for this sync.
+    if(localProp>0) r.propLive=localProp;
+   }
+   r.liveRev=Number(r.propLive||0)*219.23/10000000;
+   r.certRev=Number(r.cert||0)*73.92/10000000;
+   r.silentRev=Number(r.silent||0)*35.61/10000000;
+   await saveRecord(r);localByKey.set(r.key,r);
+  }
+  await getAll();
+  // Normalize legacy aliases and recalculate from source counts before sending rows to Sheets.
+  let payload=records.map(r=>{
+   const propCandidates=[r.propLive,r['Prop. Live Accounts'],r['Prop.Live Accounts'],r.prop_live_accounts];
+   const propLive=propCandidates.map(v=>Number(v||0)).find(v=>v>0)||0;
+   const live=Number(r.live||0),cert=Number(r.cert||0),silent=Number(r.silent||0);
+   return {...r,live,propLive,cert,silent,liveRev:propLive*219.23/10000000,certRev:cert*73.92/10000000,silentRev:silent*35.61/10000000};
+  });
+  if(payload.length){let pushed=await api('uploadRecords',{records:payload});if(!pushed.ok)throw Error(pushed.error||'Could not update calculated revenue in Google Sheet')}
+  let stamp=new Date().toLocaleString();await putSetting('lastSync',stamp);$('lastSync').textContent=stamp;$('syncStatus').textContent='Google sync complete • '+stamp;toast('Google sync complete. Prop. Live Accounts and all revenue values recalculated; '+records.length+' records processed.')
+ }catch(e){$('syncStatus').textContent='Google sync failed • local data retained';toast('Google sync failed: '+e.message)}finally{$('syncBtn').disabled=false}
+}
 async function uploadCSV(file){let txt=await file.text(),rows=parseCSV(txt);if(!rows.length)throw Error('CSV is empty or could not be parsed.');let m=$('month').value;let done=0;for(const o of rows){let r=normRow(o,m);await saveRecord(r);done++;$('uploadProgress').firstElementChild.style.width=(done/rows.length*100)+'%'}await getAll();$('uploadMessage').textContent=`Processed ${done} rows; same division/month entries replaced.`;if(config.apiUrl){try{let batch=rows.map(o=>{let r=normRow(o,m);return {...r,liveRev:Number(r.propLive||0)*219.23/10000000,certRev:Number(r.cert||0)*73.92/10000000,silentRev:Number(r.silent||0)*35.61/10000000}});let result=await api('uploadRecords',{records:batch});if(!result.ok)throw Error(result.error||'Upload failed');toast(`CSV saved locally and synced to Google (${done} rows).`)}catch(e){toast(`CSV saved locally; Google upload pending: ${e.message}`)}}else toast(`CSV saved to local database (${done} rows). Configure Google sync to upload.`)}
 function download(name,content,type='text/csv;charset=utf-8'){let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 function template(){download('POSB_Revenue_Monthly_Template_FY2026-27.csv','Month,Division,Live Accounts,Prop.Live Accounts,Certificates,Silent Accounts,Live Accounts Revenue,Certificate Revenue,Silent Revenue\n2026-04,Akola Division,0,0,0,0,,,\n')}
