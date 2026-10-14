@@ -180,7 +180,7 @@ function cleanHeader(s){return String(s||'').trim().toLowerCase().replace(/[₹%
 function parseCSV(text){let rows=[],row=[],v='',q=false;for(let i=0;i<text.length;i++){let c=text[i];if(c==='"'&&q&&text[i+1]==='"'){v+='"';i++}else if(c==='"')q=!q;else if(c===','&&!q){row.push(v.trim());v=''}else if((c==='\n'||c==='\r')&&!q){if(c==='\r'&&text[i+1]==='\n')i++;row.push(v.trim());if(row.some(x=>x!==''))rows.push(row);row=[];v=''}else v+=c}row.push(v.trim());if(row.some(x=>x!==''))rows.push(row);if(rows.length<2)return [];let headers=rows.shift().map(cleanHeader);return rows.map(r=>Object.fromEntries(headers.map((h,i)=>[h,r[i]??''])))}
 function pick(o,names){for(const n of names){let k=cleanHeader(n);if(o[k]!==undefined&&o[k]!=='')return o[k]}return ''}function num(v){let n=Number(String(v??'').replace(/[,₹%\s]/g,''));return Number.isFinite(n)?n:0}
 function normRow(o,selectedMonth){let division=pick(o,['Division','Division Name','Office']);let match=DIVISIONS.find(x=>x[0].toLowerCase()===String(division).trim().toLowerCase());if(!match)match=DIVISIONS.find(x=>x[0].toLowerCase().startsWith(String(division).trim().toLowerCase()));if(!match)throw Error('Unknown Division: '+division);let month=pick(o,['Month','Report Month','Month Key'])||selectedMonth;if(/^\d{4}-\d{2}$/.test(month)===false){let mm=MONTHS.find(x=>x[1].toLowerCase()===String(month).toLowerCase()||x[1].slice(0,3).toLowerCase()===String(month).toLowerCase());month=mm?.[0]||selectedMonth}if(!MONTHS.some(x=>x[0]===month))throw Error('Invalid month: '+month);
-let live=num(pick(o,['Live Accounts','Live Account','live'])), propLive=num(pick(o,['Prop.Live Accounts','Prop. Live Accounts','Prop Live Accounts','Proportionate Live Accounts','Proportionate Live Account','Prop Live A/C','Proportionate Live A/C','Prop. Live A/C','propLive','prop_live_accounts'])), cert=num(pick(o,['Certificates','Certificate','Certificate Accounts','No. of Certificates','Certificates Count','cert','certificate_count'])), silent=num(pick(o,['Silent Accounts','Silent A/C','Silent Accounts Count','No. of Silent Accounts','Silent Account','silent','silent_accounts']));let liveRev=propLive*219.23/10000000, certRev=cert*73.92/10000000, silentRev=silent*35.61/10000000;return {key:month+'|'+match[0],month,division:match[0],live,propLive,cert,silent,liveRev,certRev,silentRev,updatedAt:new Date().toISOString()}}
+let live=num(pick(o,['Live Accounts','Live Account','live'])), propLive=live*monthIdx(month)/12, cert=num(pick(o,['Certificates','Certificate','Certificate Accounts','No. of Certificates','Certificates Count','cert','certificate_count'])), silent=num(pick(o,['Silent Accounts','Silent A/C','Silent Accounts Count','No. of Silent Accounts','Silent Account','silent','silent_accounts']));let liveRev=propLive*219.23/10000000, certRev=cert*73.92/10000000, silentRev=silent*35.61/10000000;return {key:month+'|'+match[0],month,division:match[0],live,propLive,cert,silent,liveRev,certRev,silentRev,updatedAt:new Date().toISOString()}}
 function calc(r,month){let ix=monthIdx(month), annual=Number(targets[r.division]??0), proportion=annual*ix/12;let lr=Number(r.propLive||0)*219.23/1e7, cr=Number(r.cert||0)*73.92/1e7, sr=Number(r.silent||0)*35.61/1e7;return {...r,annual,proportion,lr,cr,sr,revenue:lr+cr+sr,pct:proportion?100*(lr+cr+sr)/proportion:0}}
 function render(){let m=$('month').value||'2026-08',div=$('division').value||'ALL';let rs=DIVISIONS.map(x=>{let raw=records.find(r=>r.key===m+'|'+x[0])||{key:m+'|'+x[0],month:m,division:x[0],live:0,propLive:0,cert:0,silent:0,liveRev:null,certRev:null,silentRev:null};return calc(raw,m)}).filter(r=>div==='ALL'||r.division===div);let total={annual:0,proportion:0,live:0,propLive:0,cert:0,silent:0,lr:0,cr:0,sr:0,revenue:0};rs.forEach(r=>Object.keys(total).forEach(k=>total[k]+=r[k]||0));let pct=total.proportion?100*total.revenue/total.proportion:0;
 $('kpis').innerHTML=[['Annual Revenue Target','₹'+fmt(total.annual)+' Cr','Full financial year'],['Proportionate Target','₹'+fmt(total.proportion)+' Cr','Upto '+(MONTHS.find(x=>x[0]===m)?.[1]||m)],['Revenue Achievement','₹'+fmt(total.revenue)+' Cr','Imported or calculated revenue'],['Achievement %',fmt(pct)+'%',pct>=100?'At or above proportionate target':'Against proportionate target'],['Live Accounts',intfmt(total.live),'Month-end cumulative']].map((x,i)=>`<div class="kpi"><div class="label">${x[0]}</div><div class="value">${x[1]}</div><div class="hint">${x[2]}</div></div>`).join('');
@@ -237,16 +237,16 @@ async function syncGoogle(){
    const readProp=(obj)=>{if(!obj)return 0;const vals=[];for(const [k,v] of Object.entries(obj)){const nk=cleanHeader(k);if(['proplive','prop live accounts','proportionate live accounts','proportionate live account','prop live a c','proportionate live a c','prop live account'].includes(nk))vals.push(v)}for(const k of ['propLive','prop_live_accounts','Prop. Live Accounts','Prop.Live Accounts','Prop Live Accounts'])if(obj[k]!==undefined)vals.push(obj[k]);return vals.map(v=>Number(String(v??'').replace(/[,₹%\\s]/g,''))).find(v=>Number.isFinite(v)&&v>0)||0};
    const localProp=readProp(local);
    const remoteProp=readProp(x);
-   const source={...x,division:x.division,month:x.month,live:x.live,propLive:localProp||remoteProp,cert:x.cert??x.certificates,silent:x.silent};
+   const source={...x,division:x.division,month:x.month,live:x.live,propLive:Number(x.live||0)*monthIdx(x.month)/12,cert:x.cert??x.certificates,silent:x.silent};
    let r=normRow(source,x.month);
    if(local){
-    // Preserve locally uploaded counts when Google still has stale zero values.
-    for(const k of ['live','propLive','cert','silent']){
+    // Preserve source counts when Google still has stale zero values.
+    for(const k of ['live','cert','silent']){
      const localValue=Number(local[k]||0);
      if(localValue!==0 && (Number(r[k])||0)===0) r[k]=localValue;
     }
-    // If local proportionate accounts are present, they are authoritative for this sync.
-    if(localProp>0) r.propLive=localProp;
+    // Always calculate proportionate accounts from Live Accounts and this record's FY month.
+    r.propLive=Number(r.live||0)*monthIdx(r.month)/12;
    }
    r.liveRev=Number(r.propLive||0)*219.23/10000000;
    r.certRev=Number(r.cert||0)*73.92/10000000;
@@ -256,9 +256,7 @@ async function syncGoogle(){
   await getAll();
   // Normalize legacy aliases and recalculate from source counts before sending rows to Sheets.
   let payload=records.map(r=>{
-   const propCandidates=[r.propLive,r['Prop. Live Accounts'],r['Prop.Live Accounts'],r.prop_live_accounts];
-   const propLive=propCandidates.map(v=>Number(v||0)).find(v=>v>0)||0;
-   const live=Number(r.live||0),cert=Number(r.cert||0),silent=Number(r.silent||0);
+   const live=Number(r.live||0),propLive=live*monthIdx(r.month)/12,cert=Number(r.cert||0),silent=Number(r.silent||0);
    return {...r,live,propLive,cert,silent,liveRev:propLive*219.23/10000000,certRev:cert*73.92/10000000,silentRev:silent*35.61/10000000};
   });
   if(payload.length){let pushed=await api('uploadRecords',{records:payload});if(!pushed.ok)throw Error(pushed.error||'Could not update calculated revenue in Google Sheet')}
@@ -317,18 +315,18 @@ const themeSelect=$('themeSelect');const savedTheme=localStorage.getItem('posbRe
   await getAll();
   let changed=0;
   for(const r of records){
-   const candidates=[r.propLive,r['Prop. Live Accounts'],r['Prop.Live Accounts'],r.prop_live_accounts,r.proportionateLiveAccounts];
-   const propLive=candidates.map(v=>Number(String(v??'').replace(/[,₹\\s]/g,''))).find(v=>Number.isFinite(v)&&v>0)||0;
+   // Proportionate Live Accounts = Live Accounts × completed months in FY ÷ 12.
+   const propLive=Number(r.live||0)*monthIdx(r.month)/12;
    const updated={...r,propLive,liveRev:propLive*219.23/10000000,certRev:Number(r.cert||0)*73.92/10000000,silentRev:Number(r.silent||0)*35.61/10000000};
    if(updated.propLive!==Number(r.propLive||0)||updated.liveRev!==Number(r.liveRev||0)){await saveRecord(updated);changed++;}
   }
   await getAll();render();
-  $('syncStatus').textContent='Account figures recalculated locally • '+new Date().toLocaleString();
+  $('syncStatus').textContent='Proportionate account figures recalculated locally • '+new Date().toLocaleString();
   if(config.apiUrl){
-   const payload=records.map(r=>{const propLive=[r.propLive,r['Prop. Live Accounts'],r['Prop.Live Accounts'],r.prop_live_accounts].map(v=>Number(String(v??'').replace(/[,₹\\s]/g,''))).find(v=>Number.isFinite(v)&&v>0)||0;return {...r,propLive,liveRev:propLive*219.23/10000000,certRev:Number(r.cert||0)*73.92/10000000,silentRev:Number(r.silent||0)*35.61/10000000};});
+   const payload=records.map(r=>{const propLive=Number(r.live||0)*monthIdx(r.month)/12;return {...r,propLive,liveRev:propLive*219.23/10000000,certRev:Number(r.cert||0)*73.92/10000000,silentRev:Number(r.silent||0)*35.61/10000000};});
    const result=await api('uploadRecords',{records:payload});if(!result.ok)throw Error(result.error||'Google Sheet update failed');
-   toast('Account figures recalculated and saved locally + Google Sheet. Prop. Live Accounts preserved from source data; Live Accounts @219.23 recalculated.');
-  }else toast('Account figures recalculated in local database. Configure Google sync to also update Google Sheet.');
+   toast('Prop. Live Accounts recalculated from Live Accounts through each record month; Live Accounts @219.23 updated locally and in Google Sheet.');
+  }else toast('Proportionate account figures recalculated locally. Configure Google sync to also update Google Sheet.');
  }catch(e){toast('Recalculation failed: '+e.message)}finally{if(btn)btn.disabled=false}
 }
 $('syncBtn').onclick=syncGoogle;$('recalcAccountFigures').onclick=recalculateAccountFigures;$('templateBtn').onclick=template;$('uploadBtn').onclick=()=>$('csvFile').click();$('csvFile').onchange=async e=>{try{if(e.target.files[0])await uploadCSV(e.target.files[0])}catch(err){toast(err.message)}e.target.value=''};document.querySelectorAll('.exportReport').forEach(b=>b.onclick=()=>exportExcel(b));document.querySelectorAll('.printReport').forEach(b=>b.onclick=()=>printReport(b));$('adminBtn').onclick=()=>{let p=prompt('Enter admin password');if(p===ADMIN_PASSWORD){admin=true;$('adminPanel').classList.remove('hidden');$('adminBtn').textContent='Admin Active';renderTargets()}else if(p!==null)toast('Incorrect password.')};$('logoutBtn').onclick=()=>{admin=false;$('adminPanel').classList.add('hidden');$('adminBtn').textContent='Admin Login'};$('saveTargets').onclick=saveTargets;$('saveConfig').onclick=async()=>{config.apiUrl=$('apiUrl').value.trim();config.sheetId=$('sheetId').value.trim();await putSetting('config',config);render();toast('Google connection saved locally.')};$('testConfig').onclick=async()=>{try{let r=await api('ping');toast('Google Apps Script reachable: '+(r.message||'OK'))}catch(e){toast('Connection test failed: '+e.message)}};$('configBtn').onclick=()=>{if(!admin){toast('Admin login required to configure Google connection.');return}$('adminPanel').classList.remove('hidden');$('apiUrl').focus();$('adminPanel').scrollIntoView({behavior:'smooth'})};
