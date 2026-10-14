@@ -233,10 +233,10 @@ async function syncGoogle(){
    const local=localByKey.get(key);
    // Prefer a valid local proportionate count over a stale zero downloaded from Google.
    // Check all legacy field spellings instead of using ??, because zero is not a missing value.
-   const localPropCandidates=local?[local.propLive,local['Prop. Live Accounts'],local['Prop.Live Accounts'],local.prop_live_accounts]:[];
-   const localProp=localPropCandidates.map(v=>Number(v||0)).find(v=>v>0)||0;
-   const remotePropCandidates=[x.propLive,x['Prop. Live Accounts'],x['Prop.Live Accounts'],x.prop_live_accounts];
-   const remoteProp=remotePropCandidates.map(v=>Number(v||0)).find(v=>v>0)||0;
+   const propAliases=['prop live accounts','proportionate live accounts','proportionate live account','prop live a c','proportionate live a c'];
+   const readProp=(obj)=>{if(!obj)return 0;const vals=[];for(const [k,v] of Object.entries(obj)){const nk=cleanHeader(k);if(['proplive','prop live accounts','proportionate live accounts','proportionate live account','prop live a c','proportionate live a c','prop live account'].includes(nk))vals.push(v)}for(const k of ['propLive','prop_live_accounts','Prop. Live Accounts','Prop.Live Accounts','Prop Live Accounts'])if(obj[k]!==undefined)vals.push(obj[k]);return vals.map(v=>Number(String(v??'').replace(/[,₹%\\s]/g,''))).find(v=>Number.isFinite(v)&&v>0)||0};
+   const localProp=readProp(local);
+   const remoteProp=readProp(x);
    const source={...x,division:x.division,month:x.month,live:x.live,propLive:localProp||remoteProp,cert:x.cert??x.certificates,silent:x.silent};
    let r=normRow(source,x.month);
    if(local){
